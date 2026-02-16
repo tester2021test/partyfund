@@ -1719,100 +1719,415 @@ function MembersManager({ user, partyId, members, isAdmin, addToast }) {
 }
 
 // ============================================================================
-// 🖨️ PRINT VIEW (Simplified)
+// 🖨️ ENHANCED PRINT VIEW
 // ============================================================================
 
 function PrintView({ party, stats, report, transactions, members, onClose }) {
+  if (!report) return null;
+
+  // Calculate member details for print
+  const memberDetails = useMemo(() => {
+    return members.map(member => {
+      const involvedExpenses = transactions.filter(t => {
+        if (t.type !== 'out') return false;
+        const involvedIds = (t.involvedMemberIds && t.involvedMemberIds.length)
+          ? t.involvedMemberIds
+          : members.map(m => m.id);
+        return involvedIds.includes(member.id);
+      });
+
+      const categorySpending = {};
+      involvedExpenses.forEach(t => {
+        const splitIds = (t.involvedMemberIds && t.involvedMemberIds.length)
+          ? t.involvedMemberIds
+          : members.map(m => m.id);
+        const shareAmount = t.amount / splitIds.length;
+        const cat = t.category || 'Misc';
+        categorySpending[cat] = (categorySpending[cat] || 0) + shareAmount;
+      });
+
+      const settlement = report.settlements.find(s => s.id === member.id);
+
+      return {
+        ...member,
+        categorySpending,
+        totalShare: settlement?.share || 0,
+        totalPaid: settlement?.paid || 0,
+        balance: settlement?.net || 0
+      };
+    });
+  }, [members, transactions, report]);
+
+  // Payment suggestions
+  const paymentSuggestions = useMemo(() => {
+    const debtors = report.settlements.filter(s => s.net < 0).map(s => ({...s})).sort((a, b) => a.net - b.net);
+    const creditors = report.settlements.filter(s => s.net > 0).map(s => ({...s})).sort((a, b) => b.net - a.net);
+    
+    const suggestions = [];
+    let i = 0, j = 0;
+    
+    while (i < debtors.length && j < creditors.length) {
+      const debt = Math.abs(debtors[i].net);
+      const credit = creditors[j].net;
+      const amount = Math.min(debt, credit);
+      
+      suggestions.push({
+        from: debtors[i].name,
+        to: creditors[j].name,
+        amount: Math.round(amount)
+      });
+      
+      debtors[i].net += amount;
+      creditors[j].net -= amount;
+      
+      if (Math.abs(debtors[i].net) < 1) i++;
+      if (Math.abs(creditors[j].net) < 1) j++;
+    }
+    
+    return suggestions;
+  }, [report]);
+
   return (
     <div className="min-h-screen bg-white p-8">
+      <style>{`
+        @media print {
+          @page {
+            size: A4;
+            margin: 1cm;
+          }
+          body {
+            print-color-adjust: exact;
+            -webkit-print-color-adjust: exact;
+          }
+          .print\\:hidden {
+            display: none !important;
+          }
+          .print\\:block {
+            display: block !important;
+          }
+          .print\\:break-before {
+            break-before: page;
+          }
+          .print\\:break-inside-avoid {
+            break-inside: avoid;
+          }
+          .no-print {
+            display: none !important;
+          }
+        }
+      `}</style>
+
       <div className="max-w-4xl mx-auto">
         {/* Controls */}
-        <div className="flex justify-end gap-2 mb-6 print:hidden">
-          <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded-lg font-bold">
+        <div className="flex justify-end gap-2 mb-6 print:hidden no-print">
+          <button 
+            onClick={onClose} 
+            className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg font-bold transition-colors"
+          >
             Close
           </button>
-          <button onClick={() => window.print()} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold">
-            Print
+          <button 
+            onClick={() => window.print()} 
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition-colors flex items-center gap-2"
+          >
+            <Printer className="w-4 h-4" />
+            Print Report
           </button>
         </div>
 
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-black text-gray-800 mb-2">{party.name}</h1>
-          <p className="text-gray-500">Party Expense Report • {new Date().toLocaleDateString()}</p>
-        </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-4 mb-8">
-          <div className="border-2 border-gray-200 rounded-lg p-4">
-            <p className="text-sm text-gray-500 mb-1">Total Collected</p>
-            <p className="text-2xl font-black text-gray-800">₹{stats.collected}</p>
-          </div>
-          <div className="border-2 border-gray-200 rounded-lg p-4">
-            <p className="text-sm text-gray-500 mb-1">Total Spent</p>
-            <p className="text-2xl font-black text-gray-800">₹{stats.spent}</p>
-          </div>
-          <div className="border-2 border-gray-200 rounded-lg p-4">
-            <p className="text-sm text-gray-500 mb-1">Balance</p>
-            <p className="text-2xl font-black text-gray-800">₹{stats.balance}</p>
+        <div className="mb-8 pb-6 border-b-4 border-indigo-600 print:break-inside-avoid">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h1 className="text-4xl font-black text-gray-900 mb-2">{party.name}</h1>
+              <p className="text-lg text-gray-600 font-bold">Expense Report</p>
+            </div>
+            <div className="text-right">
+              <p className="text-sm text-gray-500 mb-1">Report Date</p>
+              <p className="text-lg font-black text-gray-900">{new Date().toLocaleDateString('en-US', { 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+              })}</p>
+              <p className="text-sm text-gray-500 mt-2">Share Code: <span className="font-mono font-bold text-gray-900">{party.shareCode}</span></p>
+            </div>
           </div>
         </div>
 
-        {/* Transactions */}
-        <div className="mb-8">
-          <h2 className="text-2xl font-black text-gray-800 mb-4">Transaction History</h2>
-          <table className="w-full">
+        {/* Executive Summary */}
+        <div className="mb-8 print:break-inside-avoid">
+          <h2 className="text-2xl font-black text-gray-900 mb-4 flex items-center gap-2">
+            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white text-sm">📊</div>
+            Executive Summary
+          </h2>
+          <div className="grid grid-cols-4 gap-4">
+            <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+              <p className="text-blue-600 text-sm font-bold mb-1">Total Collected</p>
+              <p className="text-3xl font-black text-blue-900">₹{stats.collected}</p>
+            </div>
+            <div className="bg-red-50 border-2 border-red-200 rounded-lg p-4">
+              <p className="text-red-600 text-sm font-bold mb-1">Total Spent</p>
+              <p className="text-3xl font-black text-red-900">₹{stats.spent}</p>
+            </div>
+            <div className="bg-green-50 border-2 border-green-200 rounded-lg p-4">
+              <p className="text-green-600 text-sm font-bold mb-1">Balance</p>
+              <p className="text-3xl font-black text-green-900">₹{stats.balance}</p>
+            </div>
+            <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-4">
+              <p className="text-purple-600 text-sm font-bold mb-1">Transactions</p>
+              <p className="text-3xl font-black text-purple-900">{transactions.length}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Settlement Plan */}
+        {paymentSuggestions.length > 0 && (
+          <div className="mb-8 bg-indigo-50 border-2 border-indigo-200 rounded-lg p-6 print:break-inside-avoid">
+            <h2 className="text-2xl font-black text-gray-900 mb-4 flex items-center gap-2">
+              <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white text-sm">💸</div>
+              Quick Settlement Plan
+            </h2>
+            <p className="text-gray-700 mb-4 font-medium">
+              {paymentSuggestions.length} {paymentSuggestions.length === 1 ? 'payment' : 'payments'} needed to settle everyone:
+            </p>
+            <div className="space-y-2">
+              {paymentSuggestions.map((suggestion, i) => (
+                <div key={i} className="bg-white border-2 border-indigo-300 rounded-lg p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 font-black text-sm">
+                      {i + 1}
+                    </div>
+                    <div>
+                      <p className="font-black text-gray-900 text-lg">
+                        {suggestion.from} → {suggestion.to}
+                      </p>
+                      <p className="text-sm text-gray-600">Payment instruction</p>
+                    </div>
+                  </div>
+                  <p className="text-3xl font-black text-indigo-600">₹{suggestion.amount}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Spending by Category */}
+        <div className="mb-8 print:break-inside-avoid">
+          <h2 className="text-2xl font-black text-gray-900 mb-4 flex items-center gap-2">
+            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white text-sm">🏷️</div>
+            Spending by Category
+          </h2>
+          <table className="w-full border-2 border-gray-200">
             <thead>
-              <tr className="border-b-2 border-gray-200">
-                <th className="text-left py-2 font-bold text-gray-600">Date</th>
-                <th className="text-left py-2 font-bold text-gray-600">Description</th>
-                <th className="text-left py-2 font-bold text-gray-600">Category</th>
-                <th className="text-right py-2 font-bold text-gray-600">Amount</th>
+              <tr className="bg-gray-100 border-b-2 border-gray-300">
+                <th className="text-left py-3 px-4 font-black text-gray-900">Category</th>
+                <th className="text-right py-3 px-4 font-black text-gray-900">Amount</th>
+                <th className="text-right py-3 px-4 font-black text-gray-900">% of Total</th>
               </tr>
             </thead>
             <tbody>
-              {transactions.map(t => (
-                <tr key={t.id} className="border-b border-gray-100">
-                  <td className="py-2 text-sm">{new Date(t.date?.toDate()).toLocaleDateString()}</td>
-                  <td className="py-2 text-sm">{t.description}</td>
-                  <td className="py-2 text-sm">{t.category}</td>
-                  <td className="py-2 text-sm text-right font-bold">
-                    {t.type === 'in' ? '+' : '-'}₹{t.amount}
-                  </td>
-                </tr>
-              ))}
+              {Object.entries(report.categories)
+                .sort(([, a], [, b]) => b - a)
+                .map(([category, amount], i) => (
+                  <tr key={category} className={`border-b border-gray-200 ${i % 2 === 0 ? 'bg-gray-50' : 'bg-white'}`}>
+                    <td className="py-3 px-4 font-bold text-gray-900">{category}</td>
+                    <td className="py-3 px-4 text-right font-black text-gray-900">₹{amount.toFixed(0)}</td>
+                    <td className="py-3 px-4 text-right font-bold text-gray-600">
+                      {((amount / parseFloat(stats.spent)) * 100).toFixed(1)}%
+                    </td>
+                  </tr>
+                ))}
+              <tr className="bg-indigo-100 border-t-2 border-indigo-300">
+                <td className="py-3 px-4 font-black text-indigo-900">TOTAL</td>
+                <td className="py-3 px-4 text-right font-black text-indigo-900">₹{stats.spent}</td>
+                <td className="py-3 px-4 text-right font-black text-indigo-900">100%</td>
+              </tr>
             </tbody>
           </table>
         </div>
 
-        {/* Settlement */}
-        {report && (
-          <div>
-            <h2 className="text-2xl font-black text-gray-800 mb-4">Final Settlement</h2>
-            <table className="w-full">
-              <thead>
-                <tr className="border-b-2 border-gray-200">
-                  <th className="text-left py-2 font-bold text-gray-600">Friend</th>
-                  <th className="text-right py-2 font-bold text-gray-600">Paid</th>
-                  <th className="text-right py-2 font-bold text-gray-600">Share</th>
-                  <th className="text-right py-2 font-bold text-gray-600">Balance</th>
+        {/* Page Break */}
+        <div className="print:break-before"></div>
+
+        {/* Individual Member Breakdowns */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-black text-gray-900 mb-4 flex items-center gap-2">
+            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white text-sm">👥</div>
+            Individual Member Breakdowns
+          </h2>
+          <div className="space-y-6">
+            {memberDetails.map((member, index) => (
+              <div key={member.id} className={`border-2 rounded-lg overflow-hidden print:break-inside-avoid ${
+                member.balance >= 0 ? 'border-green-300' : 'border-red-300'
+              }`}>
+                {/* Member Header */}
+                <div className={`p-4 ${member.balance >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-black text-lg ${
+                        member.balance >= 0 ? 'bg-green-600' : 'bg-red-600'
+                      }`}>
+                        {member.name.substring(0, 2).toUpperCase()}
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-black text-gray-900">{member.name}</h3>
+                        <p className="text-sm text-gray-600 font-medium">
+                          {member.balance >= 0 ? 'Gets money back' : 'Needs to pay'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm text-gray-600 font-bold mb-1">Net Balance</p>
+                      <p className={`text-3xl font-black ${member.balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {member.balance >= 0 ? '+' : ''}₹{Math.round(member.balance)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Member Details */}
+                <div className="p-4 bg-white">
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div className="bg-blue-50 border border-blue-200 rounded p-3">
+                      <p className="text-blue-600 text-sm font-bold mb-1">Total Paid</p>
+                      <p className="text-2xl font-black text-blue-900">₹{Math.round(member.totalPaid)}</p>
+                    </div>
+                    <div className="bg-purple-50 border border-purple-200 rounded p-3">
+                      <p className="text-purple-600 text-sm font-bold mb-1">Fair Share</p>
+                      <p className="text-2xl font-black text-purple-900">₹{Math.round(member.totalShare)}</p>
+                    </div>
+                  </div>
+
+                  {/* Category Spending */}
+                  {Object.keys(member.categorySpending).length > 0 && (
+                    <div>
+                      <h4 className="font-black text-gray-900 mb-2">Category-wise Spending:</h4>
+                      <div className="grid grid-cols-2 gap-2">
+                        {Object.entries(member.categorySpending)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([cat, amount]) => (
+                            <div key={cat} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                              <span className="font-bold text-gray-700 text-sm">{cat}</span>
+                              <span className="font-black text-gray-900">₹{Math.round(amount)}</span>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Page Break */}
+        <div className="print:break-before"></div>
+
+        {/* Transaction History */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-black text-gray-900 mb-4 flex items-center gap-2">
+            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white text-sm">📝</div>
+            Complete Transaction History
+          </h2>
+          <table className="w-full border-2 border-gray-200">
+            <thead>
+              <tr className="bg-gray-100 border-b-2 border-gray-300">
+                <th className="text-left py-3 px-4 font-black text-gray-900">Date</th>
+                <th className="text-left py-3 px-4 font-black text-gray-900">Description</th>
+                <th className="text-left py-3 px-4 font-black text-gray-900">Category</th>
+                <th className="text-left py-3 px-4 font-black text-gray-900">Type</th>
+                <th className="text-right py-3 px-4 font-black text-gray-900">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transactions.map((t, i) => (
+                <tr key={t.id} className={`border-b border-gray-200 ${i % 2 === 0 ? 'bg-gray-50' : 'bg-white'}`}>
+                  <td className="py-2 px-4 text-sm text-gray-700">
+                    {new Date(t.date?.toDate()).toLocaleDateString()}
+                  </td>
+                  <td className="py-2 px-4 font-bold text-gray-900">{t.description}</td>
+                  <td className="py-2 px-4 text-sm text-gray-700">{t.category}</td>
+                  <td className="py-2 px-4">
+                    <span className={`px-2 py-1 rounded text-xs font-bold ${
+                      t.type === 'in' 
+                        ? 'bg-green-100 text-green-700' 
+                        : 'bg-red-100 text-red-700'
+                    }`}>
+                      {t.type === 'in' ? 'Income' : 'Expense'}
+                    </span>
+                  </td>
+                  <td className={`py-2 px-4 text-right font-black ${
+                    t.type === 'in' ? 'text-green-600' : 'text-red-600'
+                  }`}>
+                    {t.type === 'in' ? '+' : '-'}₹{t.amount}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {report.settlements.map(s => (
-                  <tr key={s.id} className="border-b border-gray-100">
-                    <td className="py-2">{s.name}</td>
-                    <td className="py-2 text-right">₹{Math.round(s.paid)}</td>
-                    <td className="py-2 text-right">₹{Math.round(s.share)}</td>
-                    <td className={`py-2 text-right font-bold ${s.net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              ))}
+              <tr className="bg-gray-100 border-t-2 border-gray-300">
+                <td colSpan="4" className="py-3 px-4 font-black text-gray-900">TOTAL</td>
+                <td className="py-3 px-4 text-right font-black text-gray-900">
+                  ₹{transactions.reduce((sum, t) => {
+                    return sum + (t.type === 'out' ? Number(t.amount) : 0);
+                  }, 0).toFixed(0)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* Final Settlement Summary */}
+        <div className="mb-8 print:break-inside-avoid">
+          <h2 className="text-2xl font-black text-gray-900 mb-4 flex items-center gap-2">
+            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white text-sm">💰</div>
+            Final Settlement Summary
+          </h2>
+          <table className="w-full border-2 border-gray-200">
+            <thead>
+              <tr className="bg-gray-100 border-b-2 border-gray-300">
+                <th className="text-left py-3 px-4 font-black text-gray-900">Member</th>
+                <th className="text-right py-3 px-4 font-black text-gray-900">Total Paid</th>
+                <th className="text-right py-3 px-4 font-black text-gray-900">Fair Share</th>
+                <th className="text-right py-3 px-4 font-black text-gray-900">Net Balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.settlements
+                .sort((a, b) => b.net - a.net)
+                .map((s, i) => (
+                  <tr key={s.id} className={`border-b border-gray-200 ${i % 2 === 0 ? 'bg-gray-50' : 'bg-white'}`}>
+                    <td className="py-3 px-4 font-bold text-gray-900">{s.name}</td>
+                    <td className="py-3 px-4 text-right font-black text-gray-900">₹{Math.round(s.paid)}</td>
+                    <td className="py-3 px-4 text-right font-black text-gray-900">₹{Math.round(s.share)}</td>
+                    <td className={`py-3 px-4 text-right font-black ${
+                      s.net >= 0 ? 'text-green-600' : 'text-red-600'
+                    }`}>
                       {s.net >= 0 ? '+' : ''}₹{Math.round(s.net)}
                     </td>
                   </tr>
                 ))}
-              </tbody>
-            </table>
+            </tbody>
+          </table>
+          <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded">
+            <p className="text-sm text-gray-700">
+              <strong>Legend:</strong> 
+              <span className="text-green-600 font-bold ml-2">+ Positive</span> = Gets money back • 
+              <span className="text-red-600 font-bold ml-2">- Negative</span> = Needs to pay
+            </p>
           </div>
-        )}
+        </div>
+
+        {/* Footer */}
+        <div className="mt-12 pt-6 border-t-2 border-gray-300 text-center print:break-inside-avoid">
+          <p className="text-sm text-gray-600 mb-2">
+            Generated by <strong className="text-indigo-600">PartyFund</strong>
+          </p>
+          <p className="text-xs text-gray-500">
+            This is an automated expense report. All calculations are based on recorded transactions.
+          </p>
+          <p className="text-xs text-gray-500 mt-2">
+            Party ID: {party.id} • Generated on {new Date().toLocaleString()}
+          </p>
+        </div>
       </div>
     </div>
   );
