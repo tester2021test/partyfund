@@ -1,6 +1,7 @@
 {
   "name": "partyfund",
   "version": "2.0.0",
+   "type": "module",
   "description": "Split expenses with friends - Firebase Edition",
   "private": true,
   "scripts": {
